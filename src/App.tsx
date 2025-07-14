@@ -150,17 +150,8 @@ function App() {
 
   // Handle URL changes in the iframe
   const handleIframeLoad = () => {
-    if (iframeRef.current && iframeRef.current.contentWindow) {
-      try {
-        // Try to get the current URL from the iframe
-        const iframeSrc = iframeRef.current.contentWindow.location.href;
-        if (iframeSrc !== 'about:blank') {
-          setCurrentUrl(iframeSrc);
-        }
-      } catch (e) {
-        console.error('Could not access iframe location:', e);
-      }
-    }
+    // Note: Cannot access iframe location for cross-origin content due to Same-Origin Policy
+    // The currentUrl state is managed by user input and agent navigation instead
   };
 
   // Function to simulate agent response in development mode
