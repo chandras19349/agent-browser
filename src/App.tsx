@@ -19,131 +19,60 @@ function App() {
   const [userQuery, setUserQuery] = useState('');
   const [agentResponses, setAgentResponses] = useState<{role: string, content: string}[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [currentUrl, setCurrentUrl] = useState('https://httpbin.org/html');
-  const [urlInput, setUrlInput] = useState('https://httpbin.org/html');
+  const [currentUrl, setCurrentUrl] = useState('https://example.com');
+  const [urlInput, setUrlInput] = useState('https://example.com');
   const iframeRef = useRef<HTMLIFrameElement>(null);
   
-  // Register agent tools in the window object
+  // Setup tool execution listener
   useEffect(() => {
-    // Check if running in Tauri context
     const isTauri = !!window.__TAURI__;
     console.log('Running in Tauri context:', isTauri);
     
     if (!isTauri) {
       console.warn('Not running in Tauri context. Some features may not work.');
+      return;
     }
     
-    // Define agent tools that can be called from backend
-    (window as any).agentTools = {
-      click_button: (selector?: string) => {
-        try {
-          const iframe = iframeRef.current;
-          if (!iframe || !iframe.contentDocument) return 'No iframe content available';
-          
-          const targetSelector = selector || 'button';
-          const btn = iframe.contentDocument.querySelector(targetSelector);
-          if (btn) {
-            (btn as HTMLElement).click();
-            return `Clicked element matching selector: ${targetSelector}`;
-          }
-          return `No element found matching selector: ${targetSelector}`;
-        } catch (error) {
-          console.error('Error in click_button:', error);
-          return `Error executing click: ${error}`;
-        }
-      },
-      
-      search_dom: (keyword: string) => {
-        try {
-          const iframe = iframeRef.current;
-          if (!iframe || !iframe.contentDocument) return 'No iframe content available';
-          
-          const text = iframe.contentDocument.body.innerText;
-          const pattern = new RegExp(`.{0,30}${keyword}.{0,30}`, 'gi');
-          const found = text.match(pattern);
-          return found ? found.join('\n') : `No match for "${keyword}"`;
-        } catch (error) {
-          console.error('Error in search_dom:', error);
-          return `Error searching DOM: ${error}`;
-        }
-      },
-      
-      scrape_table: () => {
-        try {
-          const iframe = iframeRef.current;
-          if (!iframe || !iframe.contentDocument) return 'No iframe content available';
-          
-          const table = iframe.contentDocument.querySelector('table');
-          if (!table) return 'No table found.';
-          
-          const rows = Array.from(table.querySelectorAll('tr')).map(row =>
-            Array.from(row.querySelectorAll('td, th'))
-              .map(cell => cell.textContent?.trim())
-              .join(' | ')
-          );
-          
-          return rows.join('\n');
-        } catch (error) {
-          console.error('Error in scrape_table:', error);
-          return `Error scraping table: ${error}`;
-        }
-      },
-      
-      extract_prices: () => {
-        try {
-          const iframe = iframeRef.current;
-          if (!iframe || !iframe.contentDocument) return 'No iframe content available';
-          
-          const text = iframe.contentDocument.body.innerText;
-          const matches = text.match(/\$\d+(\.\d+)?/g);
-          return matches ? matches.join(', ') : 'No prices found';
-        } catch (error) {
-          console.error('Error in extract_prices:', error);
-          return `Error extracting prices: ${error}`;
-        }
-      },
-      
-      navigate_to: (url: string) => {
-        try {
-          // Ensure URL has protocol
-          const formattedUrl = url.startsWith('http') ? url : `https://${url}`;
-          setCurrentUrl(formattedUrl);
-          setUrlInput(formattedUrl);
-          return `Navigating to ${url}`;
-        } catch (error) {
-          return `Error navigating: ${error}`;
-        }
-      }
-    };
-    
-    // Listen for tool execution requests from backend only if running in Tauri context
     const setupToolListener = async () => {
-      if (!window.__TAURI__) {
-        console.warn('Tauri API not available. Tool execution will not work.');
-        return;
-      }
-      
       try {
-        await window.__TAURI__.event.listen('agent-tool', async (event) => {
-          const { tool, arg, responseEvent } = event.payload;
-          console.log('Received tool request:', tool, arg, 'Response event:', responseEvent);
+        await window.__TAURI__.event.listen('execute-tool', async (event) => {
+          const { tool, arg, request_id } = event.payload;
+          console.log('Executing tool:', tool, 'with arg:', arg, 'request_id:', request_id);
           
-          const tools = (window as any).agentTools;
-          if (tools && tools[tool]) {
-            try {
-              const result = await tools[tool](arg);
-              console.log('Tool result:', result);
-              // Send back result to Rust backend with the specific response event
-              await window.__TAURI__.event.emit(responseEvent, result);
-            } catch (error) {
-              console.error('Error executing tool:', error);
-              await window.__TAURI__.event.emit(responseEvent, `Error: ${error}`);
+          let result: string;
+          
+          try {
+            switch (tool) {
+              case 'click_button':
+                result = await clickButton(arg);
+                break;
+              case 'search_dom':
+                result = await searchDom(arg || 'content');
+                break;
+              case 'scrape_table':
+                result = await scrapeTable();
+                break;
+              case 'extract_prices':
+                result = await extractPrices();
+                break;
+              case 'navigate_to':
+                result = await navigateTo(arg || '');
+                break;
+              default:
+                result = `Error: Unknown tool '${tool}'`;
             }
-          } else {
-            await window.__TAURI__.event.emit(responseEvent, `Error: Tool '${tool}' not found`);
+          } catch (error) {
+            result = `Error executing ${tool}: ${error}`;
           }
+          
+          // Send result back to backend
+          await window.__TAURI__.invoke('tool_response', {
+            request_id,
+            result
+          });
         });
-        console.log('Tool listener set up successfully');
+        
+        console.log('Tool execution listener set up successfully');
       } catch (error) {
         console.error('Error setting up tool listener:', error);
       }
@@ -151,6 +80,140 @@ function App() {
     
     setupToolListener();
   }, []);
+
+  // Tool implementations
+  const clickButton = async (selector?: string): Promise<string> => {
+    try {
+      const iframe = iframeRef.current;
+      if (!iframe || !iframe.contentDocument) {
+        return 'No iframe content available';
+      }
+      
+      const targetSelector = selector || 'button, input[type="button"], input[type="submit"], a';
+      const elements = iframe.contentDocument.querySelectorAll(targetSelector);
+      
+      if (elements.length === 0) {
+        return `No clickable elements found matching selector: ${targetSelector}`;
+      }
+      
+      const element = elements[0] as HTMLElement;
+      element.click();
+      
+      return `Successfully clicked element: ${element.tagName.toLowerCase()}${element.id ? '#' + element.id : ''}${element.className ? '.' + element.className.split(' ').join('.') : ''}`;
+    } catch (error) {
+      return `Error clicking button: ${error}`;
+    }
+  };
+
+  const searchDom = async (keyword: string): Promise<string> => {
+    try {
+      const iframe = iframeRef.current;
+      if (!iframe || !iframe.contentDocument) {
+        return 'No iframe content available';
+      }
+      
+      const text = iframe.contentDocument.body.innerText || iframe.contentDocument.body.textContent || '';
+      const lines = text.split('\n').filter(line => line.trim().length > 0);
+      
+      const matches = lines.filter(line => 
+        line.toLowerCase().includes(keyword.toLowerCase())
+      );
+      
+      if (matches.length === 0) {
+        return `No matches found for "${keyword}". Page contains ${lines.length} lines of text.`;
+      }
+      
+      const limitedMatches = matches.slice(0, 5); // Limit to first 5 matches
+      return `Found ${matches.length} matches for "${keyword}":\n\n${limitedMatches.join('\n')}`;
+    } catch (error) {
+      return `Error searching DOM: ${error}`;
+    }
+  };
+
+  const scrapeTable = async (): Promise<string> => {
+    try {
+      const iframe = iframeRef.current;
+      if (!iframe || !iframe.contentDocument) {
+        return 'No iframe content available';
+      }
+      
+      const tables = iframe.contentDocument.querySelectorAll('table');
+      if (tables.length === 0) {
+        return 'No tables found on this page';
+      }
+      
+      const table = tables[0]; // Get first table
+      const rows = Array.from(table.querySelectorAll('tr'));
+      
+      if (rows.length === 0) {
+        return 'Table found but no rows detected';
+      }
+      
+      const tableData = rows.map(row => {
+        const cells = Array.from(row.querySelectorAll('td, th'));
+        return cells.map(cell => (cell.textContent || '').trim()).join(' | ');
+      }).filter(row => row.length > 0);
+      
+      return `Table data extracted (${tableData.length} rows):\n\n${tableData.join('\n')}`;
+    } catch (error) {
+      return `Error scraping table: ${error}`;
+    }
+  };
+
+  const extractPrices = async (): Promise<string> => {
+    try {
+      const iframe = iframeRef.current;
+      if (!iframe || !iframe.contentDocument) {
+        return 'No iframe content available';
+      }
+      
+      const text = iframe.contentDocument.body.innerText || iframe.contentDocument.body.textContent || '';
+      
+      // Multiple price patterns
+      const patterns = [
+        /\$\d+(?:\.\d{2})?/g,           // $19.99, $19
+        /\d+(?:\.\d{2})?\s*(?:USD|dollars?)/gi, // 19.99 USD, 19 dollars
+        /\d+(?:\.\d{2})?\s*€/g,        // 19.99€
+        /£\d+(?:\.\d{2})?/g,           // £19.99
+        /\d+(?:\.\d{2})?\s*(?:EUR|GBP)/gi // 19.99 EUR
+      ];
+      
+      const allMatches = new Set<string>();
+      
+      patterns.forEach(pattern => {
+        const matches = text.match(pattern);
+        if (matches) {
+          matches.forEach(match => allMatches.add(match.trim()));
+        }
+      });
+      
+      if (allMatches.size === 0) {
+        return 'No prices found on this page';
+      }
+      
+      const priceList = Array.from(allMatches).slice(0, 10); // Limit to 10 prices
+      return `Found ${allMatches.size} prices:\n${priceList.join(', ')}`;
+    } catch (error) {
+      return `Error extracting prices: ${error}`;
+    }
+  };
+
+  const navigateTo = async (url: string): Promise<string> => {
+    try {
+      if (!url) {
+        return 'Error: No URL provided';
+      }
+      
+      // Ensure URL has protocol
+      const formattedUrl = url.startsWith('http') ? url : `https://${url}`;
+      setCurrentUrl(formattedUrl);
+      setUrlInput(formattedUrl);
+      
+      return `Successfully navigated to: ${formattedUrl}`;
+    } catch (error) {
+      return `Error navigating: ${error}`;
+    }
+  };
 
   // Function to handle URL navigation
   const handleNavigate = () => {
@@ -173,73 +236,64 @@ function App() {
     }
   };
 
-  // Handle URL changes in the iframe
-  const handleIframeLoad = () => {
-    // Note: Cannot access iframe location for cross-origin content due to Same-Origin Policy
-    // The currentUrl state is managed by user input and agent navigation instead
-  };
-
   // Function to simulate agent response in development mode
   const simulateAgentResponse = async (prompt: string): Promise<string> => {
-    // Add a small delay to simulate API processing
     await new Promise(resolve => setTimeout(resolve, 1000));
     
-    // Generate a mock response based on the prompt
-    if (prompt.toLowerCase().includes('about') || prompt.toLowerCase().includes('what is')) {
-      return `Thought: I need to analyze what this website is about.
-
-Action: search_dom(heading)
-
-Observation: Found matches for 'A simple HTML document'
-
-Thought: I can see this is a test HTML page.
-
-Final Answer: This appears to be a simple HTML test page from httpbin.org, which is commonly used for testing HTTP requests and responses. It contains basic HTML elements and is useful for testing web scraping and browser automation tools.`;
-    } 
-    
-    if (prompt.toLowerCase().includes('extract') || prompt.toLowerCase().includes('price')) {
-      return `Thought: I'll look for any prices mentioned on this page.
+    if (prompt.toLowerCase().includes('price')) {
+      return `Thought: I need to look for any prices mentioned on this page.
 
 Action: extract_prices
 
-Observation: Prices found: $19.99, $29.99, $49.99
+Observation: Found 3 prices: $19.99, $29.99, $49.99
 
 Thought: I found some pricing information on the page.
 
 Final Answer: I found the following prices on this page: $19.99, $29.99, and $49.99. These appear to be sample prices for testing purposes.`;
+    } 
+    
+    if (prompt.toLowerCase().includes('table')) {
+      return `Thought: I'll extract any table data from this page.
+
+Action: scrape_table
+
+Observation: Table data extracted (3 rows):
+Header 1 | Header 2 | Header 3
+Value 1 | Value 2 | Value 3
+Data A | Data B | Data C
+
+Thought: I successfully extracted the table information.
+
+Final Answer: I found a table with 3 rows and 3 columns. The table contains headers and sample data that appears to be for testing purposes.`;
     }
     
-    // Default response for other queries
-    return `Thought: I need to understand the query "${prompt}" in the context of this website.
+    return `Thought: I need to understand what this page contains to answer the user's question.
 
-Action: search_dom(html)
+Action: search_dom(${prompt.split(' ')[0] || 'content'})
 
-Observation: Found matches for 'HTML' and 'test page'
+Observation: Found 5 matches for content including page headers and main text sections.
 
-Thought: This gives me some context about the website's focus.
+Thought: I can see this page has various content sections.
 
-Final Answer: Based on the content I can see, this appears to be a test HTML page, likely from httpbin.org which is a service for testing HTTP requests. It's a simple page that's useful for testing web scraping, browser automation, and other web development tools.`;
+Final Answer: Based on my analysis, this appears to be a test page with various HTML elements. The page contains standard web content that's useful for testing browser automation and web scraping tools.`;
   };
 
-  // Function to run the agent with more capability
+  // Function to run the agent
   const runAgent = async (prompt: string) => {
     if (isLoading || !prompt.trim()) return;
     
     setIsLoading(true);
-    
-    // Add the user query to the responses
     setAgentResponses(prev => [...prev, { role: 'user', content: prompt }]);
     
     try {
       let response: string;
       
-      // Check if Tauri API is available
       if (!window.__TAURI__) {
-        console.log('Running in development mode - using simulated agent responses');
+        console.log('Running in development mode - using simulated responses');
         response = await simulateAgentResponse(prompt);
       } else {
-        // Call the run_agent command to start the full agent process
-        response = await window.__TAURI__.invoke('run_agent', {
+        // Use the new agent with tools
+        response = await window.__TAURI__.invoke('run_agent_with_tools', {
           prompt,
           url: currentUrl,
         });
@@ -247,7 +301,6 @@ Final Answer: Based on the content I can see, this appears to be a test HTML pag
       
       console.log('Agent response:', response);
       
-      // Add the response to the chat
       if (response && typeof response === 'string') {
         setAgentResponses(prev => [...prev, { role: 'assistant', content: response }]);
       }
@@ -260,33 +313,9 @@ Final Answer: Based on the content I can see, this appears to be a test HTML pag
     } finally {
       setIsLoading(false);
       setUserQuery('');
-      // Open sidebar if it's closed
       if (!isSidebarOpen) setIsSidebarOpen(true);
     }
   };
-
-  // Add a contextmenu handler to allow asking about selected text
-  useEffect(() => {
-    const handleContextMenu = async (e: MouseEvent) => {
-      e.preventDefault();
-      
-      const selection = window.getSelection()?.toString() || '';
-      if (selection) {
-        await runAgent(`Help me understand: ${selection}`);
-      }
-    };
-    
-    // Only add context menu handler if running in Tauri context
-    if (window.__TAURI__) {
-      document.addEventListener('contextmenu', handleContextMenu);
-      
-      return () => {
-        document.removeEventListener('contextmenu', handleContextMenu);
-      };
-    }
-    
-    return undefined;
-  }, []);
 
   // Handle form submission
   const handleSubmit = (e: React.FormEvent) => {
@@ -294,7 +323,7 @@ Final Answer: Based on the content I can see, this appears to be a test HTML pag
     runAgent(userQuery);
   };
 
-  // Format agent responses with syntax highlighting for different parts
+  // Format agent responses with syntax highlighting
   const formatResponse = (content: string) => {
     return content.split('\n\n').map((paragraph, i) => {
       if (paragraph.startsWith('Thought:')) {
@@ -347,19 +376,15 @@ Final Answer: Based on the content I can see, this appears to be a test HTML pag
         </div>
       </nav>
       
-      {/* Main content area */}
       <div className="content-area">
-        {/* Browser iframe */}
         <iframe
           ref={iframeRef}
           src={currentUrl}
           title="webview"
           className="browser-iframe"
-          onLoad={handleIframeLoad}
-          sandbox="allow-same-origin allow-scripts allow-forms"
+          sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
         />
         
-        {/* Agent sidebar */}
         <div className={`agent-sidebar ${isSidebarOpen ? 'open' : 'closed'}`}>
           <div className="sidebar-header">
             <h2>AI Browser Assistant</h2>
@@ -369,19 +394,21 @@ Final Answer: Based on the content I can see, this appears to be a test HTML pag
             {agentResponses.length === 0 && (
               <div className="welcome-message">
                 <h3>Welcome to Agentic Browser</h3>
-                <p>I'm your AI browser assistant. I can help you navigate the web and interact with pages.</p>
-                <p>Try these commands:</p>
+                <p>I'm your AI browser assistant. I can help you navigate and interact with web pages.</p>
+                <p><strong>Try these commands:</strong></p>
                 <ul>
-                  <li>"What is this page about?"</li>
-                  <li>"Summarize this page"</li>
-                  <li>"Extract data from this table"</li>
-                  <li>"Find prices on this page"</li>
+                  <li>"What prices are on this page?"</li>
+                  <li>"Extract the table data"</li>
+                  <li>"Search for contact information"</li>
+                  <li>"Click the first button"</li>
+                  <li>"Navigate to wikipedia.org"</li>
                 </ul>
                 <p><strong>Iframe-friendly test sites:</strong></p>
                 <ul>
+                  <li>example.com (current default)</li>
                   <li>httpbin.org/html</li>
-                  <li>example.com</li>
                   <li>jsonplaceholder.typicode.com</li>
+                  <li>httpbin.org/forms/post</li>
                 </ul>
               </div>
             )}
@@ -429,7 +456,6 @@ Final Answer: Based on the content I can see, this appears to be a test HTML pag
           </form>
         </div>
         
-        {/* Add a toggle button for the sidebar */}
         <button 
           onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
           style={{ 
