@@ -19,7 +19,7 @@ function App() {
   const [userQuery, setUserQuery] = useState('');
   const [agentResponses, setAgentResponses] = useState<{role: string, content: string}[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [currentUrl, setCurrentUrl] = useState('https://www.google.com');
+  const [currentUrl, setCurrentUrl] = useState('https://example.com');
   const iframeRef = useRef<HTMLIFrameElement>(null);
   
   // Register agent tools in the window object
