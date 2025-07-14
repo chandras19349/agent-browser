@@ -19,7 +19,8 @@ function App() {
   const [userQuery, setUserQuery] = useState('');
   const [agentResponses, setAgentResponses] = useState<{role: string, content: string}[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [currentUrl, setCurrentUrl] = useState('https://example.com');
+  const [currentUrl, setCurrentUrl] = useState('https://httpbin.org/html');
+  const [urlInput, setUrlInput] = useState('https://httpbin.org/html');
   const iframeRef = useRef<HTMLIFrameElement>(null);
   
   // Register agent tools in the window object
@@ -104,7 +105,10 @@ function App() {
       
       navigate_to: (url: string) => {
         try {
-          setCurrentUrl(url);
+          // Ensure URL has protocol
+          const formattedUrl = url.startsWith('http') ? url : `https://${url}`;
+          setCurrentUrl(formattedUrl);
+          setUrlInput(formattedUrl);
           return `Navigating to ${url}`;
         } catch (error) {
           return `Error navigating: ${error}`;
@@ -148,6 +152,27 @@ function App() {
     setupToolListener();
   }, []);
 
+  // Function to handle URL navigation
+  const handleNavigate = () => {
+    let url = urlInput.trim();
+    if (!url) return;
+    
+    // Add protocol if missing
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = `https://${url}`;
+    }
+    
+    setCurrentUrl(url);
+    setUrlInput(url);
+  };
+
+  // Handle URL input key press
+  const handleUrlKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleNavigate();
+    }
+  };
+
   // Handle URL changes in the iframe
   const handleIframeLoad = () => {
     // Note: Cannot access iframe location for cross-origin content due to Same-Origin Policy
@@ -165,11 +190,11 @@ function App() {
 
 Action: search_dom(heading)
 
-Observation: Found matches for 'AI That Builds Competitive Advantage'
+Observation: Found matches for 'A simple HTML document'
 
-Thought: I can see this is a company website related to AI solutions.
+Thought: I can see this is a test HTML page.
 
-Final Answer: This website appears to be for Kodryx, a company focused on practical AI solutions for businesses. Their tagline is "AI That Builds Competitive Advantage" and they seem to offer AI services that help businesses gain a competitive edge. They emphasize real-world AI applications with measurable impact.`;
+Final Answer: This appears to be a simple HTML test page from httpbin.org, which is commonly used for testing HTTP requests and responses. It contains basic HTML elements and is useful for testing web scraping and browser automation tools.`;
     } 
     
     if (prompt.toLowerCase().includes('extract') || prompt.toLowerCase().includes('price')) {
@@ -181,19 +206,19 @@ Observation: Prices found: $19.99, $29.99, $49.99
 
 Thought: I found some pricing information on the page.
 
-Final Answer: I found the following prices on this page: $19.99, $29.99, and $49.99. These might be for different subscription tiers or products offered by Kodryx.`;
+Final Answer: I found the following prices on this page: $19.99, $29.99, and $49.99. These appear to be sample prices for testing purposes.`;
     }
     
     // Default response for other queries
     return `Thought: I need to understand the query "${prompt}" in the context of this website.
 
-Action: search_dom(kodryx)
+Action: search_dom(html)
 
-Observation: Found matches for 'Kodryx AI Agent' and 'Workflow Automation'
+Observation: Found matches for 'HTML' and 'test page'
 
 Thought: This gives me some context about the website's focus.
 
-Final Answer: Based on the content I can see, this website is for Kodryx, a company specializing in AI agents and workflow automation. They appear to offer enterprise AI solutions that help businesses improve efficiency and gain competitive advantages through practical AI implementation.`;
+Final Answer: Based on the content I can see, this appears to be a test HTML page, likely from httpbin.org which is a service for testing HTTP requests. It's a simple page that's useful for testing web scraping, browser automation, and other web development tools.`;
   };
 
   // Function to run the agent with more capability
@@ -308,11 +333,12 @@ Final Answer: Based on the content I can see, this website is for Kodryx, a comp
         <div className="url-bar">
           <input 
             type="text" 
-            value={currentUrl} 
-            onChange={(e) => setCurrentUrl(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && setCurrentUrl(currentUrl)}
+            value={urlInput} 
+            onChange={(e) => setUrlInput(e.target.value)}
+            onKeyDown={handleUrlKeyPress}
+            placeholder="Enter URL (e.g., example.com, httpbin.org/html)"
           />
-          <button onClick={() => setCurrentUrl(currentUrl)}>Go</button>
+          <button onClick={handleNavigate}>Go</button>
         </div>
         <div className="nav-controls">
           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
@@ -346,12 +372,17 @@ Final Answer: Based on the content I can see, this website is for Kodryx, a comp
                 <p>I'm your AI browser assistant. I can help you navigate the web and interact with pages.</p>
                 <p>Try these commands:</p>
                 <ul>
-                  <li>"Search for [topic]"</li>
+                  <li>"What is this page about?"</li>
                   <li>"Summarize this page"</li>
                   <li>"Extract data from this table"</li>
                   <li>"Find prices on this page"</li>
                 </ul>
-                <p>You can also right-click on any text to ask me about it.</p>
+                <p><strong>Iframe-friendly test sites:</strong></p>
+                <ul>
+                  <li>httpbin.org/html</li>
+                  <li>example.com</li>
+                  <li>jsonplaceholder.typicode.com</li>
+                </ul>
               </div>
             )}
             <div className="messages">
